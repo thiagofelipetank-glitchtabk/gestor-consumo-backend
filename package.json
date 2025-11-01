@@ -1,0 +1,32 @@
+{
+  "name": "gestor-consumo-backend",
+  "version": "3.3.0",
+  "description": "API backend do sistema Gestor de Consumo — Pro",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "init": "node initDB.js",
+    "dev": "nodemon server.js"
+  },
+  "dependencies": {
+    "bcrypt": "^5.1.1",
+    "better-sqlite3": "^9.4.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  },
+  "keywords": [
+    "gestor",
+    "consumo",
+    "energia",
+    "água",
+    "pizzaria",
+    "dashboard"
+  ],
+  "author": "Thiago Tank",
+  "license": "MIT"
+}

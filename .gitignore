@@ -1,0 +1,18 @@
+# Node
+node_modules/
+npm-debug.log
+.DS_Store
+
+# Ambiente
+.env
+
+# Banco de dados
+consumo.db
+consumo.db-wal
+consumo.db-shm
+
+# Logs
+*.log
+
+# Sistema
+*.sqlite
