@@ -55,6 +55,21 @@ function initDB() {
   }
 
   console.log('✅ Banco de dados inicializado com sucesso!');
+
+// ===============================
+// Tabela de Metas (goals)
+// ===============================
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS goals (
+    meter_id TEXT PRIMARY KEY,
+    meter_name TEXT NOT NULL,
+    goal_daily REAL NOT NULL,
+    warn_percent INTEGER NOT NULL
+  )
+`).run();
+
+console.log("✅ Tabela 'goals' criada/verificada com sucesso!");
+
   db.close();
 }
 
