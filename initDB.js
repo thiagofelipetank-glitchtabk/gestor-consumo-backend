@@ -1,77 +1,69 @@
-// ===============================
-// initDB.js - Criação do Banco
-// ===============================
-const Database = require('better-sqlite3');
-const path = require('path');
-const fs = require('fs');
+const Database = require("better-sqlite3");
+const db = new Database("consumo.db");
 
-// Caminho do banco — usa variável de ambiente se existir (Render)
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'consumo.db');
-const db = new Database(DB_PATH);
-
-// Função para inicializar o banco
-function initDB() {
-  console.log('🛠️ Iniciando banco de dados...');
-
-  // Cria tabela de usuários (admin, operadores etc.)
-  db.prepare(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      email TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT 'admin',
-      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-  `).run();
-
-  // Cria tabela de medidores (água, energia, gás etc.)
-  db.prepare(`
-    CREATE TABLE IF NOT EXISTS meters (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      type TEXT NOT NULL CHECK (type IN ('agua', 'energia', 'gas')),
-      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-  `).run();
-
-  // Cria tabela de leituras associadas a cada medidor
-  db.prepare(`
-    CREATE TABLE IF NOT EXISTS readings (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      meter_id INTEGER NOT NULL,
-      value REAL NOT NULL,
-      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (meter_id) REFERENCES meters (id) ON DELETE CASCADE
-    )
-  `).run();
-
-  // Verifica se já há algum usuário no sistema
-  const count = db.prepare('SELECT COUNT(*) as c FROM users').get().c;
-  if (count === 0) {
-    console.log('⚠️ Nenhum usuário encontrado. Crie o primeiro admin via /auth/first-admin.');
-  } else {
-    console.log(`✅ ${count} usuário(s) encontrado(s) no banco.`);
-  }
-
-  console.log('✅ Banco de dados inicializado com sucesso!');
-
-// ===============================
-// Tabela de Metas (goals)
-// ===============================
+// Tabela de usuários (já existente)
 db.prepare(`
-  CREATE TABLE IF NOT EXISTS goals (
-    meter_id TEXT PRIMARY KEY,
-    meter_name TEXT NOT NULL,
-    goal_daily REAL NOT NULL,
-    warn_percent INTEGER NOT NULL
-  )
+CREATE TABLE IF NOT EXISTS usuarios (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nome TEXT NOT NULL,
+  usuario TEXT UNIQUE NOT NULL,
+  senha TEXT NOT NULL,
+  tipo TEXT DEFAULT 'comum'
+)
 `).run();
 
-console.log("✅ Tabela 'goals' criada/verificada com sucesso!");
+// Tabela de medidores (água/energia)
+db.prepare(`
+CREATE TABLE IF NOT EXISTS medidores (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nome TEXT NOT NULL,
+  tipo TEXT CHECK(tipo IN ('agua', 'energia')) NOT NULL,
+  localizacao TEXT
+)
+`).run();
 
-  db.close();
-}
+// ✅ NOVO: Tabela de imóveis
+db.prepare(`
+CREATE TABLE IF NOT EXISTS imoveis (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nome TEXT NOT NULL,
+  endereco TEXT,
+  responsavel TEXT
+)
+`).run();
 
-// Executa a inicialização
-initDB();
+// ✅ NOVO: Tabela de leituras de consumo
+db.prepare(`
+CREATE TABLE IF NOT EXISTS leituras (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  medidor_id INTEGER,
+  imovel_id INTEGER,
+  data_leitura TEXT NOT NULL,
+  valor REAL NOT NULL,
+  FOREIGN KEY (medidor_id) REFERENCES medidores(id),
+  FOREIGN KEY (imovel_id) REFERENCES imoveis(id)
+)
+`).run();
+
+// ✅ NOVO: Tabelas de funcionários e vales
+db.prepare(`
+CREATE TABLE IF NOT EXISTS funcionarios (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nome TEXT NOT NULL,
+  cargo TEXT,
+  salario_base REAL
+)
+`).run();
+
+db.prepare(`
+CREATE TABLE IF NOT EXISTS vales (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  funcionario_id INTEGER,
+  data TEXT NOT NULL,
+  valor REAL NOT NULL,
+  descricao TEXT,
+  FOREIGN KEY (funcionario_id) REFERENCES funcionarios(id)
+)
+`).run();
+
+console.log("📦 Banco de dados atualizado com sucesso (Fase 2)");

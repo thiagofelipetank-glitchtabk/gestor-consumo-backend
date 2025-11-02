@@ -1,178 +1,266 @@
-// ===============================
-// 🌐 Gestor de Consumo — Backend Pro
-// ===============================
+// ======================================================
+// GESTOR DE CONSUMO — BACKEND PRO (FASE 2 COMPLETA)
+// ======================================================
 
-const express = require("express");
-const cors = require("cors");
-const bcrypt = require("bcrypt");
-const Database = require("better-sqlite3");
-const fs = require("fs");
-const path = require("path");
+require('dotenv').config();
+const express = require('express');
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
+const Database = require('better-sqlite3');
 
 const app = express();
-app.use(cors());
-app.use(express.json());
+const PORT = process.env.PORT || 3000;
+const JWT_SECRET = process.env.JWT_SECRET || 'SEGREDO_LOCAL_123';
+const LOG_FILE = path.join(__dirname, 'server.log');
 
-// -------------------------------
-// 📦 Banco de Dados
-// -------------------------------
-const dbPath = path.join(__dirname, "consumo.db");
-const db = new Database(dbPath);
+// =============================================
+// Função de log
+// =============================================
+function logEvent(message) {
+  const timestamp = new Date().toLocaleString('pt-BR');
+  const line = `[${timestamp}] ${message}\n`;
+  fs.appendFileSync(LOG_FILE, line);
+  console.log(message);
+}
 
-db.prepare(`CREATE TABLE IF NOT EXISTS readings (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  device_id TEXT,
-  tipo TEXT,
-  data TEXT,
-  hora TEXT,
-  pa REAL, pb REAL, pc REAL, pt REAL,
-  epa_c REAL, epb_c REAL, epc_c REAL, ept_c REAL,
-  epa_g REAL, epb_g REAL, epc_g REAL, ept_g REAL,
-  iarms REAL, ibrms REAL, icrms REAL,
-  uarms REAL, ubrms REAL, ucrms REAL,
-  consumo_litros REAL, vazao_lh REAL,
-  valor REAL,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-)`).run();
+// =============================================
+// Inicializa banco e tabelas
+// =============================================
+function initDatabase() {
+  logEvent('🛠️ Verificando estrutura do banco...');
+  const db = new Database('consumo.db');
 
-db.prepare(`CREATE TABLE IF NOT EXISTS users (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT, email TEXT UNIQUE, password TEXT, role TEXT DEFAULT 'user',
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-)`).run();
+  // ------------------- Usuários -------------------
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      email TEXT UNIQUE NOT NULL,
+      password TEXT NOT NULL,
+      role TEXT DEFAULT 'admin',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `).run();
 
-// -------------------------------
-// 🩺 Rota de Teste
-// -------------------------------
-app.get("/health", (req, res) => {
-  res.json({ status: "ok", message: "Servidor ativo!" });
-});
+  // ------------------- Medidores -------------------
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS meters (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `).run();
 
-// -------------------------------
-// 👤 Autenticação
-// -------------------------------
-app.post("/auth/first-admin", (req, res) => {
-  const { name, email, password } = req.body;
-  const existing = db.prepare("SELECT * FROM users").get();
-  if (existing)
-    return res
-      .status(400)
-      .json({ error: "Já existe usuário. Use /auth/login." });
+  // ------------------- Leituras -------------------
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS readings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      meter_id TEXT,
+      meter_name TEXT,
+      type TEXT,
+      value REAL,
+      pa REAL, pb REAL, pc REAL, pt REAL,
+      epa_c REAL, epb_c REAL, epc_c REAL, ept_c REAL,
+      iarms REAL, ibrms REAL, icrms REAL,
+      uarms REAL, ubrms REAL, ucrms REAL,
+      consumo_litros REAL, vazao_lh REAL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `).run();
 
-  const hash = bcrypt.hashSync(password, 10);
-  db.prepare(
-    "INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, 'admin')"
-  ).run(name, email, hash);
+  // ------------------- Metas -------------------
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS goals (
+      meter_id TEXT PRIMARY KEY,
+      meter_name TEXT NOT NULL,
+      goal_daily REAL NOT NULL,
+      warn_percent INTEGER NOT NULL
+    )
+  `).run();
 
-  res.json({ success: true, message: "Admin criado!" });
-});
+  // ------------------- NOVAS TABELAS — FASE 2 -------------------
+  // Imóveis
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS imoveis (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      nome TEXT NOT NULL,
+      endereco TEXT,
+      responsavel TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `).run();
 
-app.post("/auth/login", (req, res) => {
-  const { email, password } = req.body;
-  const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
-  if (!user) return res.status(401).json({ error: "Usuário não encontrado" });
-  const ok = bcrypt.compareSync(password, user.password);
-  if (!ok) return res.status(401).json({ error: "Senha incorreta" });
-  res.json({
-    success: true,
-    user: { id: user.id, name: user.name, role: user.role, email: user.email },
-  });
-});
+  // Leituras detalhadas (vinculadas a imóvel e medidor)
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS leituras (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      medidor_id INTEGER,
+      imovel_id INTEGER,
+      data_leitura TEXT NOT NULL,
+      valor REAL NOT NULL,
+      FOREIGN KEY (medidor_id) REFERENCES meters(id),
+      FOREIGN KEY (imovel_id) REFERENCES imoveis(id)
+    )
+  `).run();
 
-// -------------------------------
-// ⚡ API para Leitura (energia e água)
-// -------------------------------
-app.post("/api/readings", (req, res) => {
-  const d = req.body;
+  // Funcionários
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS funcionarios (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      nome TEXT NOT NULL,
+      cargo TEXT,
+      salario_base REAL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `).run();
 
-  // energia
-  if (d.tipo === "energia") {
-    db.prepare(
-      `INSERT INTO readings (device_id, tipo, data, hora, pa, pb, pc, pt,
-        epa_c, epb_c, epc_c, ept_c, epa_g, epb_g, epc_g, ept_g,
-        iarms, ibrms, icrms, uarms, ubrms, ucrms, valor)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      d.id,
-      d.tipo,
-      d.data,
-      d.hora,
-      d.pa,
-      d.pb,
-      d.pc,
-      d.pt,
-      d.epa_c,
-      d.epb_c,
-      d.epc_c,
-      d.ept_c,
-      d.epa_g || 0,
-      d.epb_g || 0,
-      d.epc_g || 0,
-      d.ept_g || 0,
-      d.iarms,
-      d.ibrms,
-      d.icrms,
-      d.uarms,
-      d.ubrms,
-      d.ucrms,
-      d.valor || 0
+  // Vales (adiantamentos)
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS vales (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      funcionario_id INTEGER,
+      data TEXT NOT NULL,
+      valor REAL NOT NULL,
+      descricao TEXT,
+      FOREIGN KEY (funcionario_id) REFERENCES funcionarios(id)
+    )
+  `).run();
+
+  // ------------------- Admin automático -------------------
+  const admin = db.prepare('SELECT * FROM users WHERE email = ?').get('thiago@teste.com');
+  if (!admin) {
+    const hash = bcrypt.hashSync('123456', 10);
+    db.prepare('INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)').run(
+      'Thiago Tank',
+      'thiago@teste.com',
+      hash,
+      'admin'
     );
+    logEvent('✅ Admin padrão criado: thiago@teste.com / 123456');
+  } else {
+    logEvent('👤 Admin já existe — sem recriação.');
   }
 
-  // água
-  if (d.tipo === "agua") {
-    db.prepare(
-      `INSERT INTO readings (device_id, tipo, data, hora, consumo_litros, vazao_lh, valor)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).run(d.id, d.tipo, d.data, d.hora, d.consumo_litros, d.vazao_lh, d.valor || 0);
-  }
+  return db;
+}
 
-  res.json({ success: true, message: "Leitura registrada com sucesso!" });
+const db = initDatabase();
+
+// =============================================
+// Configurações do servidor
+// =============================================
+app.use(cors());
+app.use(express.json({ limit: '2mb' }));
+
+// =============================================
+// Rota de status
+// =============================================
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', message: 'Servidor ativo!', engine: 'sqlite' });
 });
 
-// -------------------------------
-// 📖 GET — Listar leituras
-// -------------------------------
-app.get("/api/readings", (req, res) => {
-  const tipo = req.query.tipo;
-  let query = "SELECT * FROM readings";
-  if (tipo === "energia") query += " WHERE tipo = 'energia'";
-  else if (tipo === "agua") query += " WHERE tipo = 'agua'";
-  query += " ORDER BY id DESC LIMIT 100";
+// =============================================
+// Login
+// =============================================
+app.post('/auth/login', async (req, res) => {
+  const { email, password } = req.body;
+  try {
+    const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+    if (!user) {
+      logEvent(`❌ Tentativa de login: usuário não encontrado (${email})`);
+      return res.status(401).json({ error: 'Usuário não encontrado' });
+    }
+    const valid = bcrypt.compareSync(password, user.password);
+    if (!valid) {
+      logEvent(`⚠️ Senha incorreta para: ${email}`);
+      return res.status(401).json({ error: 'Senha incorreta' });
+    }
 
-  const rows = db.prepare(query).all();
+    const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '12h' });
+    logEvent(`✅ Login bem-sucedido: ${email}`);
+    res.json({ token, user: { id: user.id, name: user.name, role: user.role } });
+  } catch (err) {
+    logEvent(`❌ ERRO login: ${err.message}`);
+    res.status(500).json({ error: 'Erro interno no login' });
+  }
+});
+
+// =============================================
+// Leituras rápidas (dashboard)
+// =============================================
+app.get('/api/readings', (req, res) => {
+  const rows = db.prepare('SELECT * FROM readings ORDER BY id DESC LIMIT 50').all();
   res.json(rows);
 });
 
-// -------------------------------
-// 💾 Versão alternativa /api/insert.php (para compatibilidade com medidores)
-// -------------------------------
-app.post("/api/insert.php", (req, res) => {
-  const d = req.body;
-  db.prepare(
-    `INSERT INTO readings (device_id, tipo, data, hora, pa, pb, pc, pt, epa_c, epb_c, epc_c, ept_c, consumo_litros, vazao_lh)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    d.id || "SEM_ID",
-    d.tipo || "desconhecido",
-    d.data || new Date().toLocaleDateString("pt-BR"),
-    d.hora || new Date().toLocaleTimeString("pt-BR"),
-    d.pa || 0,
-    d.pb || 0,
-    d.pc || 0,
-    d.pt || 0,
-    d.epa_c || 0,
-    d.epb_c || 0,
-    d.epc_c || 0,
-    d.ept_c || 0,
-    d.consumo_litros || 0,
-    d.vazao_lh || 0
-  );
-  res.json({ success: true, message: "Dados recebidos via /api/insert.php" });
+// =============================================
+// CRUD — IMÓVEIS
+// =============================================
+app.get('/api/imoveis', (req, res) => {
+  const imoveis = db.prepare('SELECT * FROM imoveis ORDER BY id DESC').all();
+  res.json(imoveis);
 });
 
-// -------------------------------
-// ⚙️ Inicialização do Servidor
-// -------------------------------
-const PORT = 3000;
-app.listen(PORT, () => console.log(`✅ Servidor rodando em http://localhost:${PORT}`));
+app.post('/api/imoveis', (req, res) => {
+  const { nome, endereco, responsavel } = req.body;
+  db.prepare('INSERT INTO imoveis (nome, endereco, responsavel) VALUES (?, ?, ?)').run(nome, endereco, responsavel);
+  res.json({ message: 'Imóvel cadastrado com sucesso!' });
+});
+
+// =============================================
+// LEITURAS POR IMÓVEL
+// =============================================
+app.get('/api/leituras/:imovel_id', (req, res) => {
+  const { imovel_id } = req.params;
+  const rows = db.prepare(`
+    SELECT l.*, m.name AS medidor_nome 
+    FROM leituras l 
+    LEFT JOIN meters m ON l.medidor_id = m.id 
+    WHERE imovel_id = ?
+    ORDER BY data_leitura DESC
+  `).all(imovel_id);
+  res.json(rows);
+});
+
+app.post('/api/leituras', (req, res) => {
+  const { medidor_id, imovel_id, data_leitura, valor } = req.body;
+  db.prepare('INSERT INTO leituras (medidor_id, imovel_id, data_leitura, valor) VALUES (?, ?, ?, ?)')
+    .run(medidor_id, imovel_id, data_leitura, valor);
+  res.json({ message: 'Leitura registrada com sucesso!' });
+});
+
+// =============================================
+// FUNCIONÁRIOS E VALES
+// =============================================
+app.get('/api/funcionarios', (req, res) => {
+  res.json(db.prepare('SELECT * FROM funcionarios ORDER BY id DESC').all());
+});
+
+app.post('/api/funcionarios', (req, res) => {
+  const { nome, cargo, salario_base } = req.body;
+  db.prepare('INSERT INTO funcionarios (nome, cargo, salario_base) VALUES (?, ?, ?)').run(nome, cargo, salario_base);
+  res.json({ message: 'Funcionário adicionado!' });
+});
+
+app.get('/api/vales/:funcionario_id', (req, res) => {
+  const vales = db.prepare('SELECT * FROM vales WHERE funcionario_id = ? ORDER BY data DESC').all(req.params.funcionario_id);
+  res.json(vales);
+});
+
+app.post('/api/vales', (req, res) => {
+  const { funcionario_id, data, valor, descricao } = req.body;
+  db.prepare('INSERT INTO vales (funcionario_id, data, valor, descricao) VALUES (?, ?, ?, ?)')
+    .run(funcionario_id, data, valor, descricao);
+  res.json({ message: 'Vale registrado com sucesso!' });
+});
+
+// =============================================
+// Inicialização do Servidor
+// =============================================
+app.listen(PORT, () => {
+  logEvent(`🚀 Servidor rodando na porta ${PORT} [local:sqlite]`);
+});

@@ -1,18 +1,16 @@
 # Node
-node_modules/
-npm-debug.log
-.DS_Store
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-store
 
 # Ambiente
 .env
-
-# Banco de dados
-consumo.db
-consumo.db-wal
-consumo.db-shm
-
-# Logs
-*.log
-
-# Sistema
+.env.local
 *.sqlite
+*.db
+
+# Arquivos do app
+consumo.db
+server.log
