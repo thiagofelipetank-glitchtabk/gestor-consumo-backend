@@ -1,60 +1,51 @@
-// ======================================================
-// seedReadings.cjs — Cria leituras simuladas (Água + Energia)
-// ======================================================
-
+// Gera leituras recentes (últimos 10 dias) para água e energia
 const Database = require("better-sqlite3");
 
-function log(msg) {
-  console.log(`[seedReadings] ${msg}`);
+const db = new Database("consumo.db");
+db.pragma("journal_mode = wal");
+
+// util
+function addDays(date, days) {
+  const d = new Date(date);
+  d.setDate(d.getDate() + days);
+  return d;
+}
+function isoDay(d) {
+  return d.toISOString().slice(0, 10);
 }
 
-function seed() {
-  const db = new Database("consumo.db");
-  db.pragma("journal_mode = wal");
+const meters = db.prepare("SELECT id, name, type FROM meters").all();
+if (!meters.length) {
+  console.log("[seedReadings] ⚠️ Nenhum medidor encontrado. Rode primeiro: npm run seed:meters");
+  process.exit(0);
+}
 
-  // Obtém medidores existentes
-  const meters = db.prepare("SELECT * FROM meters").all();
-  if (!meters.length) {
-    log("⚠️ Nenhum medidor encontrado. Execute antes o seedMeters.cjs");
-    db.close();
-    return;
-  }
+const today = new Date();
+const start = addDays(today, -9); // 10 dias
 
-  const insertReading = db.prepare(`
-    INSERT INTO readings (meter_id, meter_name, type, value, consumo_litros, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `);
+for (const m of meters) {
+  for (let i = 0; i < 10; i++) {
+    const day = isoDay(addDays(start, i));
+    let value = 0;
 
-  const today = new Date();
-
-  for (const m of meters) {
-    log(`🔹 Criando leituras para ${m.name} (${m.type})...`);
-
-    for (let i = 7; i >= 0; i--) {
-      const date = new Date(today);
-      date.setDate(today.getDate() - i);
-
-      // Simula valores diferentes por tipo
-      let value = 0;
-      if (m.type === "agua") {
-        value = 0.3 + Math.random() * 0.5; // m³/dia
-      } else if (m.type === "energia" || m.type === "energia-3f") {
-        value = 3 + Math.random() * 5; // kWh/dia
-      }
-
-      insertReading.run(
-        m.id,
-        m.name,
-        m.type === "energia-3f" ? "energia" : m.type,
-        value,
-        m.type === "agua" ? value * 1000 : null, // litros aproximados
-        date.toISOString()
-      );
+    if (m.type === "agua") {
+      // Consumo diário em m³ (ex: 0.2 a 1.5)
+      value = Number((0.2 + Math.random() * 1.3).toFixed(2));
+      db.prepare(`
+        INSERT INTO readings (meter_id, meter_name, type, value, consumo_litros, vazao_lh, created_at)
+        VALUES (?, ?, 'agua', ?, ?, NULL, datetime(? || ' 12:00:00'))
+      `).run(m.id, m.name, value, Math.round(value * 1000), day);
+    } else if (m.type === "energia") {
+      // Consumo diário em kWh (ex: 1.5 a 8.0)
+      value = Number((1.5 + Math.random() * 6.5).toFixed(2));
+      db.prepare(`
+        INSERT INTO readings (meter_id, meter_name, type, value, consumo_litros, vazao_lh, created_at)
+        VALUES (?, ?, 'energia', ?, NULL, NULL, datetime(? || ' 12:00:00'))
+      `).run(m.id, m.name, value, day);
     }
   }
-
-  log("🎯 Leituras simuladas criadas com sucesso!");
-  db.close();
+  console.log(`[seedReadings] ✅ Leituras geradas para: ${m.name} (${m.type})`);
 }
 
-seed();
+db.close();
+console.log("[seedReadings] ✅ Finalizado");

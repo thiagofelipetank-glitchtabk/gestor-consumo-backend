@@ -1,13 +1,17 @@
 {
   "name": "gestor-consumo-backend",
-  "version": "4.2.0",
-  "description": "API do Gestor de Consumo (água/energia) - Pro",
+  "version": "4.3.0",
+  "description": "API do Gestor de Consumo (água/energia) - Thiago Tank",
   "main": "server.js",
   "type": "module",
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "init": "node initDB.cjs"
+    "init": "node initDB.cjs",
+    "seed:users": "node seedUsers.cjs",
+    "seed:meters": "node seedMeters.cjs",
+    "seed:readings": "node seedReadings.cjs",
+    "seed:all": "npm run seed:users && npm run seed:meters && npm run seed:readings"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",

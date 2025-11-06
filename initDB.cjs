@@ -1,11 +1,5 @@
 // ======================================================
 // initDB.cjs — Setup / Migrações do banco (SQLite)
-// - Users / Auth
-// - Meters / Readings (água, energia)
-// - Tariffs (água/energia) com histórico
-// - User_Meters (permissões por usuário)
-// - Buffer trifásico (energy 3ph)
-// - Garante admin padrão thiago@teste.com / 123456
 // ======================================================
 
 const Database = require("better-sqlite3");
@@ -19,9 +13,7 @@ function run() {
   const db = new Database("consumo.db");
   db.pragma("journal_mode = wal");
 
-  // -------------------------
   // USERS
-  // -------------------------
   db.prepare(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -33,7 +25,7 @@ function run() {
     );
   `).run();
 
-  // Cria admin padrão, se não existir
+  // Admin
   const adminEmail = "thiago@teste.com";
   const existingAdmin = db.prepare("SELECT * FROM users WHERE email = ?").get(adminEmail);
   if (!existingAdmin) {
@@ -45,29 +37,25 @@ function run() {
     log("✅ Admin já existe");
   }
 
-  // -------------------------
   // METERS
-  // -------------------------
   db.prepare(`
     CREATE TABLE IF NOT EXISTS meters (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
       type TEXT NOT NULL,          -- 'agua' | 'energia' | 'energia-3f'
-      token TEXT,                  -- token de autenticação de cada equipamento
+      token TEXT,                  -- token por equipamento (no 3f é único p/ as 3 fases)
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
   `).run();
 
-  // -------------------------
-  // READINGS (leituras)
-  // -------------------------
+  // READINGS
   db.prepare(`
     CREATE TABLE IF NOT EXISTS readings (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       meter_id INTEGER,
       meter_name TEXT,
       type TEXT,                    -- 'agua' | 'energia'
-      value REAL,                   -- valor principal (litros ou kWh)
+      value REAL,                   -- delta (m³/kWh) consolidado p/ dashboards
       consumo_litros REAL,
       vazao_lh REAL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -75,9 +63,7 @@ function run() {
     );
   `).run();
 
-  // -------------------------
-  // GOALS (metas de consumo)
-  // -------------------------
+  // GOALS
   db.prepare(`
     CREATE TABLE IF NOT EXISTS goals (
       meter_id TEXT PRIMARY KEY,
@@ -87,9 +73,7 @@ function run() {
     );
   `).run();
 
-  // -------------------------
-  // TARIFFS (tarifas com histórico)
-  // -------------------------
+  // TARIFFS
   db.prepare(`
     CREATE TABLE IF NOT EXISTS tariffs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -111,9 +95,7 @@ function run() {
     log("💵 Tarifas padrão criadas (água=10.00, energia=0.85)");
   }
 
-  // -------------------------
-  // USER_METERS (vínculo usuário ↔ medidor)
-  // -------------------------
+  // USER_METERS
   db.prepare(`
     CREATE TABLE IF NOT EXISTS user_meters (
       user_id INTEGER NOT NULL,
@@ -124,9 +106,7 @@ function run() {
     );
   `).run();
 
-  // -------------------------
-  // ENERGY 3PH BUFFER (armazenamento trifásico bruto)
-  // -------------------------
+  // BUFFER IE 3F
   db.prepare(`
     CREATE TABLE IF NOT EXISTS energy3ph_buffer (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -134,6 +114,19 @@ function run() {
       raw_json TEXT NOT NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (meter_parent_id) REFERENCES meters(id)
+    );
+  `).run();
+
+  // MAPA FASES 3F
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS energy3ph_phase_map (
+      parent_meter_id INTEGER NOT NULL,
+      phase TEXT NOT NULL,              -- 'A' | 'B' | 'C'
+      child_meter_id INTEGER NOT NULL,  -- meter.type = 'energia'
+      label TEXT,
+      PRIMARY KEY (parent_meter_id, phase),
+      FOREIGN KEY (parent_meter_id) REFERENCES meters(id),
+      FOREIGN KEY (child_meter_id) REFERENCES meters(id)
     );
   `).run();
 
