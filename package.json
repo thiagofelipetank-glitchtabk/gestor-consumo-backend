@@ -8,7 +8,7 @@
     "init": "node initDB.cjs",
     "start": "node server.js",
     "build": "npm rebuild better-sqlite3 --update-binary",
-    "postinstall": "npm rebuild better-sqlite3 --update-binary"
+  "postinstall": "npm rebuild better-sqlite3 --update-binary && node initDB.cjs"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",
