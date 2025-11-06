@@ -1,70 +1,53 @@
-// ================================================
-// GESTOR DE CONSUMO - Módulo de Usuários (Model)
-// ================================================
-const db = require('../initDB');
-const bcrypt = require('bcrypt');
+// ============================================================
+// models/usersModel.js
+// Modelo de Usuários — CRUD e autenticação
+// ============================================================
 
-// Cria tabela se não existir
-function createTable() {
-  db.prepare(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      email TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      role TEXT DEFAULT 'viewer',
-      allowed_meters TEXT DEFAULT '[]'
-    )
-  `).run();
-}
+import bcrypt from "bcrypt";
+import Database from "better-sqlite3";
+import path from "path";
+import { fileURLToPath } from "url";
 
-// Lista todos os usuários (sem senha)
-function getAll() {
-  return db.prepare('SELECT id, name, email, role, allowed_meters FROM users').all();
-}
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const db = new Database(path.join(__dirname, "../consumo.db"));
 
-// Busca por e-mail
-function getByEmail(email) {
-  return db.prepare('SELECT * FROM users WHERE email = ?').get(email);
-}
+export const UsersModel = {
+  getAll() {
+    const rows = db.prepare("SELECT id,name,email,role,allowed_meters FROM users").all();
+    return rows.map((u) => ({
+      ...u,
+      allowed_meters: JSON.parse(u.allowed_meters || "[]"),
+    }));
+  },
 
-// Busca por ID
-function getById(id) {
-  return db.prepare('SELECT * FROM users WHERE id = ?').get(id);
-}
+  getByEmail(email) {
+    return db.prepare("SELECT * FROM users WHERE email=?").get(email);
+  },
 
-// Cria usuário com hash da senha
-async function create(user) {
-  const hash = await bcrypt.hash(user.password, 10);
-  db.prepare('INSERT INTO users (name, email, password_hash, role, allowed_meters) VALUES (?, ?, ?, ?, ?)')
-    .run(user.name, user.email, hash, user.role || 'viewer', JSON.stringify(user.allowed_meters || []));
-}
+  create({ name, email, password, role = "user", allowed_meters = [] }) {
+    const hash = bcrypt.hashSync(password, 10);
+    db.prepare(
+      "INSERT INTO users (name,email,password,role,allowed_meters) VALUES (?,?,?,?,?)"
+    ).run(name, email, hash, role, JSON.stringify(allowed_meters));
+  },
 
-// Atualiza usuário (opcional senha e medidores)
-async function update(id, data) {
-  const existing = getById(id);
-  if (!existing) throw new Error('Usuário não encontrado');
-  const name = data.name || existing.name;
-  const email = data.email || existing.email;
-  const role = data.role || existing.role;
-  const allowed_meters = data.allowed_meters ? JSON.stringify(data.allowed_meters) : existing.allowed_meters;
-  let password_hash = existing.password_hash;
-  if (data.password) password_hash = await bcrypt.hash(data.password, 10);
-  db.prepare(`UPDATE users SET name=?, email=?, password_hash=?, role=?, allowed_meters=? WHERE id=?`)
-    .run(name, email, password_hash, role, allowed_meters, id);
-}
+  updateAllowedMeters(userId, allowed_meters) {
+    db.prepare("UPDATE users SET allowed_meters=? WHERE id=?").run(
+      JSON.stringify(allowed_meters),
+      userId
+    );
+  },
 
-// Remove usuário
-function remove(id) {
-  db.prepare('DELETE FROM users WHERE id = ?').run(id);
-}
-
-module.exports = {
-  createTable,
-  getAll,
-  getByEmail,
-  getById,
-  create,
-  update,
-  remove
+  ensureAdmin() {
+    const admin = db.prepare("SELECT * FROM users WHERE role='admin'").get();
+    if (!admin) {
+      const hash = bcrypt.hashSync("123456", 10);
+      db.prepare("INSERT INTO users (name,email,password,role) VALUES (?,?,?,?)")
+        .run("Thiago Tank", "thiago@teste.com", hash, "admin");
+      console.log("👤 Admin padrão criado: thiago@teste.com / 123456");
+    }
+  },
 };
+
+UsersModel.ensureAdmin();
