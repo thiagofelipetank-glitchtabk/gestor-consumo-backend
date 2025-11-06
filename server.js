@@ -1,5 +1,5 @@
 // ============================================================
-// GESTOR DE CONSUMO — BACKEND PRO 4.6 (Trifásico IE + Resumo Mês)
+// GESTOR DE CONSUMO — BACKEND PRO 4.6 FINAL (Cloud Ready)
 // ============================================================
 
 import express from "express";
@@ -13,9 +13,18 @@ import bodyParser from "body-parser";
 dotenv.config();
 
 const app = express();
+
+// aceita JSON e x-www-form-urlencoded (IE envia form)
 app.use(express.json());
-app.use(bodyParser.urlencoded({ extended: true })); // aceita form-urlencoded (POST IE)
-app.use(cors({ origin: "*", methods: ["GET","POST","PUT","DELETE","OPTIONS"], allowedHeaders: ["Content-Type","Authorization"] }));
+app.use(bodyParser.urlencoded({ extended: true }));
+
+// CORS (em nuvem use CORS_ORIGIN="*" ou sua URL do front)
+const allowed = (process.env.CORS_ORIGIN || "*");
+app.use(cors({
+  origin: (origin, cb) => cb(null, true), // liberar geral p/ nuvem
+  methods: ["GET","POST","PUT","DELETE","OPTIONS"],
+  allowedHeaders: ["Content-Type","Authorization"]
+}));
 
 // DB
 const db = new Database(process.env.DB_FILE || "./consumo.db");
@@ -40,50 +49,40 @@ function adminOnly(req, res, next) {
   next();
 }
 
-// Root
-app.get("/", (req, res) => res.send("🚀 API do Gestor de Consumo ativa!"));
+app.get("/", (_req, res) => res.send("🚀 API do Gestor de Consumo ativa!"));
 
-// ---------------------------
-// AUTH
-// ---------------------------
+// ---------------- AUTH ----------------
 app.post("/auth/login", async (req, res) => {
   try {
     const { email, password } = req.body;
-    const user = db.prepare("SELECT * FROM users WHERE email=?").get(email);
-    if (!user) return res.status(400).json({ error: "Usuário não encontrado" });
-    const match = await bcrypt.compare(password, user.password);
-    if (!match) return res.status(401).json({ error: "Senha incorreta" });
-    const token = createToken(user);
-    const allowed_meters = db.prepare("SELECT meter_id FROM user_meters WHERE user_id=?").all(user.id).map(r => r.meter_id);
-    res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role, allowed_meters } });
-  } catch (e) {
-    console.error("LOGIN:", e);
-    res.status(500).json({ error: "Erro interno ao fazer login" });
-  }
+    const u = db.prepare("SELECT * FROM users WHERE email=?").get(email);
+    if (!u) return res.status(400).json({ error: "Usuário não encontrado" });
+    const ok = await bcrypt.compare(password, u.password);
+    if (!ok) return res.status(401).json({ error: "Senha incorreta" });
+    const token = createToken(u);
+    const allowed_meters = db.prepare("SELECT meter_id FROM user_meters WHERE user_id=?").all(u.id).map(r => r.meter_id);
+    res.json({ token, user: { id: u.id, name: u.name, email: u.email, role: u.role, allowed_meters } });
+  } catch (e) { res.status(500).json({ error: "Erro interno ao fazer login" }); }
 });
 
-// ---------------------------
-// METERS
-// ---------------------------
-app.get("/api/meters", (req, res) => {
+// --------------- METERS ----------------
+app.get("/api/meters", (_req, res) => {
   try {
     const rows = db.prepare("SELECT id, name, type, token, created_at FROM meters ORDER BY id DESC").all();
     res.json(rows);
-  } catch (e) {
-    res.status(500).json({ error: "Erro interno ao buscar medidores" });
-  }
+  } catch (e) { res.status(500).json({ error: "Erro interno ao buscar medidores" }); }
 });
 
 app.post("/api/meters", auth, adminOnly, (req, res) => {
   const { name, type } = req.body;
-  const token = type === "energia-3f" || type === "energia" ? ("METER-" + Math.random().toString(36).substring(2,10).toUpperCase()) : null;
+  const token = (type === "energia-3f" || type === "energia")
+    ? ("METER-" + Math.random().toString(36).substring(2,10).toUpperCase())
+    : null;
   try {
     db.prepare("INSERT INTO meters (name, type, token) VALUES (?, ?, ?)").run(name, type, token);
     const meter = db.prepare("SELECT * FROM meters WHERE id=last_insert_rowid()").get();
     res.json({ success: true, meter });
-  } catch (e) {
-    res.status(500).json({ error: "Erro interno ao criar medidor" });
-  }
+  } catch (e) { res.status(500).json({ error: "Erro interno ao criar medidor" }); }
 });
 
 app.delete("/api/meters/:id", auth, adminOnly, (req, res) => {
@@ -94,44 +93,29 @@ app.delete("/api/meters/:id", auth, adminOnly, (req, res) => {
     db.prepare("DELETE FROM energy3ph_phase_map WHERE parent_meter_id=? OR child_meter_id=?").run(id, id);
     db.prepare("DELETE FROM meters WHERE id=?").run(id);
     res.json({ success: true });
-  } catch (e) {
-    res.status(500).json({ error: "Erro ao excluir medidor" });
-  }
+  } catch (e) { res.status(500).json({ error: "Erro ao excluir medidor" }); }
 });
 
-// ---------------------------
-/** IE TRIFÁSICO — MAPEAMENTO FASES
- *  POST /api/energy3ph/:parentId/autocreate
- *    => cria 3 medidores (A/B/C) e faz o mapa (labels padrão Apto 01..03)
- *  GET  /api/energy3ph/:parentId/map
- *  POST /api/energy3ph/:parentId/map   body: { map: [{phase:'A', child_meter_id, label}, ...] }
- */
+// --------- 3F: MAPEAMENTO FASES ----------
 app.post("/api/energy3ph/:parentId/autocreate", auth, adminOnly, (req, res) => {
   const { parentId } = req.params;
   try {
     const parent = db.prepare("SELECT * FROM meters WHERE id=? AND type='energia-3f'").get(parentId);
     if (!parent) return res.status(404).json({ error: "Medidor trifásico não encontrado" });
-
-    const phases = ["A","B","C"];
-    const created = [];
-    for (let i=0;i<phases.length;i++){
-      const ph = phases[i];
+    const phases = ["A","B","C"]; const created = [];
+    for (const ph of phases) {
       const name = `${parent.name} — Fase ${ph}`;
-      const token = "METER-" + Math.random().toString(36).substring(2,10).toUpperCase(); // não usado pelo IE (usamos o do parent), mas útil para debug
+      const token = "METER-" + Math.random().toString(36).substring(2,10).toUpperCase();
       db.prepare("INSERT INTO meters (name, type, token) VALUES (?, 'energia', ?)").run(name, token);
       const child = db.prepare("SELECT * FROM meters WHERE id=last_insert_rowid()").get();
-      const label = `Apto 0${i+1}`;
       db.prepare(`
         INSERT OR REPLACE INTO energy3ph_phase_map (parent_meter_id, phase, child_meter_id, label)
         VALUES (?, ?, ?, ?)
-      `).run(parent.id, ph, child.id, label);
+      `).run(parent.id, ph, child.id, null);
       created.push({ phase: ph, child });
     }
     res.json({ success:true, created });
-  } catch (e) {
-    console.error("autocreate:", e);
-    res.status(500).json({ error: "Erro ao criar fases" });
-  }
+  } catch (e) { res.status(500).json({ error: "Erro ao criar fases" }); }
 });
 
 app.get("/api/energy3ph/:parentId/map", auth, adminOnly, (req, res) => {
@@ -145,9 +129,7 @@ app.get("/api/energy3ph/:parentId/map", auth, adminOnly, (req, res) => {
       ORDER BY m.phase
     `).all(parentId);
     res.json(rows);
-  } catch (e) {
-    res.status(500).json({ error: "Erro ao buscar mapa de fases" });
-  }
+  } catch (e) { res.status(500).json({ error: "Erro ao buscar mapa de fases" }); }
 });
 
 app.post("/api/energy3ph/:parentId/map", auth, adminOnly, (req, res) => {
@@ -165,17 +147,12 @@ app.post("/api/energy3ph/:parentId/map", auth, adminOnly, (req, res) => {
       stmt.run(parent.id, item.phase, item.child_meter_id, item.label || null);
     }
     res.json({ success:true });
-  } catch (e) {
-    res.status(500).json({ error: "Erro ao salvar mapa de fases" });
-  }
+  } catch (e) { res.status(500).json({ error: "Erro ao salvar mapa de fases" }); }
 });
 
-// ---------------------------
-// IE TRIFÁSICO — INGEST (1 token, payload completo)
-// Aceita JSON e x-www-form-urlencoded (compatível com “/api/insert.php” do manual)
+// --------- IE 3F INGEST: /api/insert.php (form) e /api/ingest/ie (json) ----------
 app.post(["/api/ingest/ie","/api/insert.php"], (req, res) => {
   try {
-    // Campos esperados: token (do medidor 3f), hora,minuto,segundo, pa,pb,pc,pt, epa_g, epb_g, epc_g, ept_g, (demais campos ignorados mas armazenados)
     const payload = req.body || {};
     const token = payload.token || payload.Token || payload.TOKEN;
     if (!token) return res.status(400).json({ error: "Token ausente" });
@@ -183,67 +160,57 @@ app.post(["/api/ingest/ie","/api/insert.php"], (req, res) => {
     const parent = db.prepare("SELECT * FROM meters WHERE token=? AND type='energia-3f'").get(token);
     if (!parent) return res.status(404).json({ error: "Medidor 3f não encontrado para este token" });
 
-    // Guarda bruto
     db.prepare("INSERT INTO energy3ph_buffer (meter_parent_id, raw_json) VALUES (?, ?)").run(parent.id, JSON.stringify(payload));
 
-    // Coleta cumulativos (kWh) por fase — usamos *_g (geral) se disponíveis
     const nowA = parseFloat(payload.epa_g ?? payload.epa_c ?? payload.pa ?? 0) || 0;
     const nowB = parseFloat(payload.epb_g ?? payload.epb_c ?? payload.pb ?? 0) || 0;
     const nowC = parseFloat(payload.epc_g ?? payload.epc_c ?? payload.pc ?? 0) || 0;
 
-    // Último bruto para calcular delta
-    const lastRow = db.prepare(`
+    const two = db.prepare(`
       SELECT raw_json FROM energy3ph_buffer
       WHERE meter_parent_id=? ORDER BY id DESC LIMIT 2
-    `).all(parent.id); // pega os 2 últimos; o último é o atual
-
+    `).all(parent.id);
     let prevA = 0, prevB = 0, prevC = 0;
-    if (lastRow.length >= 2) {
-      const prevPayload = JSON.parse(lastRow[1].raw_json || "{}");
-      prevA = parseFloat(prevPayload.epa_g ?? prevPayload.epa_c ?? prevPayload.pa ?? 0) || 0;
-      prevB = parseFloat(prevPayload.epb_g ?? prevPayload.epb_c ?? prevPayload.pb ?? 0) || 0;
-      prevC = parseFloat(prevPayload.epc_g ?? prevPayload.epc_c ?? prevPayload.pc ?? 0) || 0;
+    if (two.length >= 2) {
+      const prev = JSON.parse(two[1].raw_json || "{}");
+      prevA = parseFloat(prev.epa_g ?? prev.epa_c ?? prev.pa ?? 0) || 0;
+      prevB = parseFloat(prev.epb_g ?? prev.epb_c ?? prev.pb ?? 0) || 0;
+      prevC = parseFloat(prev.epc_g ?? prev.epc_c ?? prev.pc ?? 0) || 0;
     }
 
-    // Delta kWh por fase (nunca negativo)
     const dA = Math.max(0, nowA - prevA);
     const dB = Math.max(0, nowB - prevB);
     const dC = Math.max(0, nowC - prevC);
 
-    // Mapeamento de fases → medidores filhos (apartamentos)
     const maps = db.prepare(`
       SELECT phase, child_meter_id, label FROM energy3ph_phase_map WHERE parent_meter_id=?
     `).all(parent.id);
 
-    // Para cada fase com mapeamento, grava leitura de energia (valor = delta kWh)
-    const insertReading = db.prepare(`
-      INSERT INTO readings (meter_id, meter_name, type, value) VALUES (?, ?, 'energia', ?)
-    `);
+    const ins = db.prepare(`INSERT INTO readings (meter_id, meter_name, type, value) VALUES (?, ?, 'energia', ?)`);
+
     for (const mp of maps) {
       if (mp.phase === "A" && dA > 0) {
         const child = db.prepare("SELECT * FROM meters WHERE id=?").get(mp.child_meter_id);
-        insertReading.run(child.id, child.name, dA);
+        if (child) ins.run(child.id, mp.label || child.name, dA);
       }
       if (mp.phase === "B" && dB > 0) {
         const child = db.prepare("SELECT * FROM meters WHERE id=?").get(mp.child_meter_id);
-        insertReading.run(child.id, child.name, dB);
+        if (child) ins.run(child.id, mp.label || child.name, dB);
       }
       if (mp.phase === "C" && dC > 0) {
         const child = db.prepare("SELECT * FROM meters WHERE id=?").get(mp.child_meter_id);
-        insertReading.run(child.id, child.name, dC);
+        if (child) ins.run(child.id, mp.label || child.name, dC);
       }
     }
 
-    return res.json({ success: true, parent_id: parent.id, deltas: { A: dA, B: dB, C: dC } });
+    return res.json({ success:true, parent_id: parent.id, deltas: { A:dA, B:dB, C:dC } });
   } catch (e) {
     console.error("INGEST IE:", e);
     res.status(500).json({ error: "Falha ao processar payload IE" });
   }
 });
 
-// ---------------------------
-// READINGS (genéricas)
-// ---------------------------
+// --------------- READINGS ----------------
 app.get("/api/readings", (req, res) => {
   const { tipo, limit = 100 } = req.query;
   try {
@@ -253,9 +220,7 @@ app.get("/api/readings", (req, res) => {
     sql += " ORDER BY id DESC LIMIT ?"; params.push(limit);
     const rows = db.prepare(sql).all(...params);
     res.json(rows);
-  } catch (e) {
-    res.status(500).json({ error: "Erro interno ao buscar leituras" });
-  }
+  } catch (e) { res.status(500).json({ error: "Erro interno ao buscar leituras" }); }
 });
 
 app.post("/api/readings", (req, res) => {
@@ -263,25 +228,18 @@ app.post("/api/readings", (req, res) => {
   try {
     const meter = db.prepare("SELECT name, type FROM meters WHERE id=?").get(meter_id);
     if (!meter) return res.status(404).json({ error: "Medidor não encontrado" });
-    db.prepare("INSERT INTO readings (meter_id, meter_name, type, value) VALUES (?, ?, ?, ?)")
-      .run(meter_id, meter.name, type, value);
+    db.prepare("INSERT INTO readings (meter_id, meter_name, type, value) VALUES (?, ?, ?, ?)").run(meter_id, meter.name, type, value);
     res.json({ success: true });
-  } catch (e) {
-    res.status(500).json({ error: "Erro interno ao registrar leitura" });
-  }
+  } catch (e) { res.status(500).json({ error: "Erro interno ao registrar leitura" }); }
 });
 
-// ---------------------------
-// TARIFAS
-// ---------------------------
-app.get("/api/tariffs", (req, res) => {
+// --------------- TARIFAS ----------------
+app.get("/api/tariffs", (_req, res) => {
   try {
     const kwh = db.prepare("SELECT price_per_unit FROM tariffs WHERE type='energia' AND ended_at IS NULL").get();
     const m3 = db.prepare("SELECT price_per_unit FROM tariffs WHERE type='agua' AND ended_at IS NULL").get();
     res.json({ kwh_price: kwh ? kwh.price_per_unit : 0, m3_price: m3 ? m3.price_per_unit : 0 });
-  } catch (e) {
-    res.status(500).json({ error: "Erro interno ao buscar tarifas" });
-  }
+  } catch (e) { res.status(500).json({ error: "Erro interno ao buscar tarifas" }); }
 });
 
 app.post("/api/tariffs", auth, adminOnly, (req, res) => {
@@ -293,14 +251,10 @@ app.post("/api/tariffs", auth, adminOnly, (req, res) => {
     db.prepare("UPDATE tariffs SET ended_at=? WHERE type='agua' AND ended_at IS NULL").run(today);
     db.prepare("INSERT INTO tariffs (type, price_per_unit, started_at, ended_at) VALUES ('agua', ?, ?, NULL)").run(m3_price, today);
     res.json({ success: true });
-  } catch (e) {
-    res.status(500).json({ error: "Erro interno ao salvar tarifas" });
-  }
+  } catch (e) { res.status(500).json({ error: "Erro interno ao salvar tarifas" }); }
 });
 
-// ---------------------------
-// RESUMO DO MÊS (por medidor)
-// ---------------------------
+// --------------- SUMMARY (MÊS) --------------
 app.get("/api/summary/month", (req, res) => {
   try {
     const now = new Date();
@@ -311,26 +265,20 @@ app.get("/api/summary/month", (req, res) => {
     const meters = db.prepare("SELECT id, name, type FROM meters ORDER BY name ASC").all();
     const out = [];
     for (const m of meters) {
-      // Somatório do mês (valor = delta já consolidado no insert)
+      if (m.type === "energia-3f") continue; // pai 3F não aparece
       const sum = db.prepare(`
         SELECT COALESCE(SUM(value),0) AS total
         FROM readings
         WHERE meter_id=? AND created_at BETWEEN ? AND ?
       `).get(m.id, start, end).total || 0;
-
       out.push({ meter_id: m.id, meter_name: m.name, type: m.type, month_total: sum });
     }
     res.json(out);
-  } catch (e) {
-    console.error("summary:", e);
-    res.status(500).json({ error: "Erro interno ao gerar resumo" });
-  }
+  } catch (e) { res.status(500).json({ error: "Erro interno ao gerar resumo" }); }
 });
 
-// ---------------------------
-// USERS + PERMISSÕES
-// ---------------------------
-app.get("/api/users", auth, adminOnly, (req, res) => {
+// --------------- USERS ----------------
+app.get("/api/users", auth, adminOnly, (_req, res) => {
   try {
     const users = db.prepare("SELECT id, name, email, role, created_at FROM users ORDER BY id DESC").all();
     const mapPerms = db.prepare("SELECT user_id, meter_id FROM user_meters").all();
@@ -341,9 +289,7 @@ app.get("/api/users", auth, adminOnly, (req, res) => {
     }
     const out = users.map(u => ({ ...u, allowed_meters: permByUser[u.id] || [] }));
     res.json(out);
-  } catch (e) {
-    res.status(500).json({ error: "Erro ao listar usuários" });
-  }
+  } catch (e) { res.status(500).json({ error: "Erro ao listar usuários" }); }
 });
 
 app.post("/api/users", auth, adminOnly, async (req, res) => {
@@ -360,9 +306,7 @@ app.post("/api/users", auth, adminOnly, async (req, res) => {
       for (const mid of meter_ids) { try { stmt.run(created.id, mid); } catch {} }
     }
     res.json({ success: true, user: { id: created.id, name: created.name, email: created.email, role: created.role } });
-  } catch (e) {
-    res.status(500).json({ error: "Erro interno ao criar usuário" });
-  }
+  } catch (e) { res.status(500).json({ error: "Erro interno ao criar usuário" }); }
 });
 
 app.post("/api/users/:id/permissions", auth, adminOnly, (req, res) => {
@@ -373,9 +317,7 @@ app.post("/api/users/:id/permissions", auth, adminOnly, (req, res) => {
     const stmt = db.prepare("INSERT INTO user_meters (user_id, meter_id) VALUES (?, ?)");
     for (const mid of meter_ids) { try { stmt.run(id, mid); } catch {} }
     res.json({ success: true });
-  } catch (e) {
-    res.status(500).json({ error: "Erro interno ao definir permissões" });
-  }
+  } catch (e) { res.status(500).json({ error: "Erro interno ao definir permissões" }); }
 });
 
 app.delete("/api/users/:id", auth, adminOnly, (req, res) => {
@@ -384,10 +326,73 @@ app.delete("/api/users/:id", auth, adminOnly, (req, res) => {
     db.prepare("DELETE FROM user_meters WHERE user_id=?").run(id);
     db.prepare("DELETE FROM users WHERE id=?").run(id);
     res.json({ success: true });
-  } catch (e) {
-    res.status(500).json({ error: "Erro interno ao excluir usuário" });
-  }
+  } catch (e) { res.status(500).json({ error: "Erro interno ao excluir usuário" }); }
 });
 
-// Start
+// START
 app.listen(PORT, () => console.log(`✅ Servidor ativo na porta ${PORT}`));
+// ============================================================
+// ROTA /api/insert.php — Recebe dados POST do medidor IE trifásico
+// ============================================================
+import bodyParser from "body-parser";
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use(bodyParser.json());
+
+app.post("/api/insert.php", async (req, res) => {
+  try {
+    const data = req.body;
+
+    // 🔹 Log para debug (Render → "View Logs")
+    console.log("📥 Dados recebidos:", data);
+
+    // Verifica se veio token
+    const token = data.token || data.Token || data.TOKEN;
+    if (!token) return res.status(400).json({ error: "Token ausente na requisição" });
+
+    // Busca medidor vinculado ao token
+    const meter = db.prepare("SELECT * FROM meters WHERE token = ?").get(token);
+    if (!meter) {
+      return res.status(404).json({ error: "Medidor não encontrado para o token informado" });
+    }
+
+    // Verifica tipo de medidor
+    if (meter.type === "energia-3f") {
+      // 🔸 Salva leitura bruta (histórico JSON completo)
+      const rawJson = JSON.stringify(data);
+      db.prepare(
+        "INSERT INTO energy3ph_buffer (meter_parent_id, raw_json) VALUES (?, ?)"
+      ).run(meter.id, rawJson);
+
+      // 🔸 Extrai dados das fases
+      const fases = [
+        { nome: "Fase A", valor: parseFloat(data.epa_g || data.epa_c || 0) },
+        { nome: "Fase B", valor: parseFloat(data.epb_g || data.epb_c || 0) },
+        { nome: "Fase C", valor: parseFloat(data.epc_g || data.epc_c || 0) },
+      ];
+
+      fases.forEach((fase, i) => {
+        db.prepare(
+          `INSERT INTO readings (meter_id, meter_name, type, value, created_at)
+           VALUES (?, ?, ?, ?, datetime('now'))`
+        ).run(meter.id, `${meter.name} - ${fase.nome}`, "energia", fase.valor);
+      });
+
+      console.log(`✅ Leituras trifásicas salvas com sucesso para ${meter.name}`);
+      return res.json({ success: true, message: "Leituras trifásicas salvas!" });
+    }
+
+    // Caso seja medidor simples (água/energia monofásico)
+    const valor = parseFloat(data.value || data.consumo || 0);
+    db.prepare(
+      `INSERT INTO readings (meter_id, meter_name, type, value, created_at)
+       VALUES (?, ?, ?, ?, datetime('now'))`
+    ).run(meter.id, meter.name, meter.type, valor);
+
+    console.log(`✅ Leitura salva para medidor ${meter.name}`);
+    return res.json({ success: true, message: "Leitura salva com sucesso!" });
+
+  } catch (err) {
+    console.error("❌ Erro em /api/insert.php:", err);
+    res.status(500).json({ error: "Erro interno ao processar dados" });
+  }
+});
