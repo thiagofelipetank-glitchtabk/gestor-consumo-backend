@@ -1,23 +1,20 @@
 {
   "name": "gestor-consumo-backend",
-  "version": "4.3.0",
-  "description": "API do Gestor de Consumo (água/energia) - Thiago Tank",
+  "version": "4.6.0",
+  "description": "API do Gestor de Consumo (água/energia) - Pro",
   "main": "server.js",
   "type": "module",
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "init": "node initDB.cjs",
-    "seed:users": "node seedUsers.cjs",
-    "seed:meters": "node seedMeters.cjs",
-    "seed:readings": "node seedReadings.cjs",
-    "seed:all": "npm run seed:users && npm run seed:meters && npm run seed:readings"
+    "init": "node initDB.cjs"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",
     "better-sqlite3": "^9.6.0",
+    "body-parser": "^1.20.3",
     "cors": "^2.8.5",
-    "dotenv": "^16.3.1",
+    "dotenv": "^16.4.5",
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2"
   },
@@ -25,7 +22,7 @@
     "nodemon": "^3.1.0"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": "20.x"
   },
   "author": "Thiago Felipe Tank",
   "license": "MIT"
