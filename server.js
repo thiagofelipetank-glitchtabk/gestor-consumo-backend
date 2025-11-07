@@ -1,5 +1,5 @@
 // ============================================================
-// GESTOR DE CONSUMO — BACKEND PRO 4.6 (Render Cloud)
+// GESTOR DE CONSUMO — BACKEND PRO 4.6.1 (Render Cloud)
 // ============================================================
 
 import express from "express";
@@ -15,27 +15,25 @@ import Database from "better-sqlite3";
 dotenv.config();
 const app = express();
 
-// Aceita JSON (IE pode enviar urlencoded → habilitamos também)
+// Aceita JSON e urlencoded (para medidores IE)
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 // ------------------------------------------------------------
-// CORS (origens permitidas) - use CORS_ORIGIN no .env (separadas por vírgula)
-// Ex.: CORS_ORIGIN=https://gestor-consumo-frontend.vercel.app,https://meu-site.com
+// CORS (origens permitidas)
 // ------------------------------------------------------------
 const allowedOrigins = (process.env.CORS_ORIGIN || "")
   .split(",")
-  .map(s => s.trim())
+  .map((s) => s.trim())
   .filter(Boolean);
 
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Permite requisições sem origin (ex.: Postman, curl)
       if (!origin) return callback(null, true);
-      if (allowedOrigins.length === 0) return callback(null, true); // se não configurado, libera geral
+      if (allowedOrigins.length === 0) return callback(null, true);
       if (allowedOrigins.includes(origin)) return callback(null, true);
-      console.error(`❌ CORS BLOCKED: ${origin}`);
+      console.error(`❌ CORS BLOCKED: Origem não permitida: ${origin}`);
       return callback(new Error("Origem não permitida pelo CORS"));
     },
     methods: "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS",
@@ -44,8 +42,7 @@ app.use(
 );
 
 // ------------------------------------------------------------
-// BANCO DE DADOS (better-sqlite3)
-// O arquivo é criado pelo initDB.cjs (executado no postinstall no Render)
+// BANCO DE DADOS
 // ------------------------------------------------------------
 const dbPath = process.env.DB_FILE || "./consumo.db";
 const db = new Database(dbPath);
@@ -89,17 +86,17 @@ function authMiddleware(req, res, next) {
 }
 
 // ------------------------------------------------------------
-// ROTAS DE AUTENTICAÇÃO
+// AUTENTICAÇÃO
 // ------------------------------------------------------------
 app.post("/auth/register", async (req, res) => {
   try {
     const { name, email, password, role } = req.body;
-    if (!email || !password) return res.status(400).json({ error: "Campos obrigatórios ausentes" });
+    if (!email || !password)
+      return res.status(400).json({ error: "Campos obrigatórios ausentes" });
 
-    const existingUser = db.prepare("SELECT * FROM users WHERE email=?").get(email);
-    if (existingUser) {
+    const existing = db.prepare("SELECT * FROM users WHERE email=?").get(email);
+    if (existing)
       return res.status(400).json({ error: "E-mail já cadastrado." });
-    }
 
     const hashed = await bcrypt.hash(password, 10);
     db.prepare("INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)")
@@ -124,7 +121,7 @@ app.post("/auth/login", async (req, res) => {
     const allowed_meters = db
       .prepare("SELECT meter_id FROM user_meters WHERE user_id=?")
       .all(user.id)
-      .map(r => r.meter_id);
+      .map((r) => r.meter_id);
 
     res.json({
       token,
@@ -133,8 +130,8 @@ app.post("/auth/login", async (req, res) => {
         name: user.name,
         email: user.email,
         role: user.role,
-        allowed_meters
-      }
+        allowed_meters,
+      },
     });
   } catch (e) {
     console.error("ERRO AO FAZER LOGIN:", e);
@@ -143,13 +140,15 @@ app.post("/auth/login", async (req, res) => {
 });
 
 // ------------------------------------------------------------
-// ROTAS DE MEDIDORES
+// MEDIDORES
 // ------------------------------------------------------------
 app.get("/api/meters", (req, res) => {
   try {
-    const rows = db.prepare(
-      "SELECT id, name, type, token, created_at FROM meters ORDER BY id DESC"
-    ).all();
+    const rows = db
+      .prepare(
+        "SELECT id, name, type, token, created_at FROM meters ORDER BY id DESC"
+      )
+      .all();
     res.json(rows);
   } catch (e) {
     console.error("ERRO ao buscar medidores:", e);
@@ -159,14 +158,22 @@ app.get("/api/meters", (req, res) => {
 
 app.post("/api/meters", authMiddleware, (req, res) => {
   try {
-    if (req.user.role !== "admin") return res.status(403).json({ error: "Acesso negado" });
+    if (req.user.role !== "admin")
+      return res.status(403).json({ error: "Acesso negado" });
     const { name, type } = req.body;
-    if (!name || !type) return res.status(400).json({ error: "name e type são obrigatórios" });
+    if (!name || !type)
+      return res.status(400).json({ error: "name e type são obrigatórios" });
 
-    // Gera token simples p/ equipamentos que suportam
-    const token = 'METER-' + Math.random().toString(36).substring(2, 10).toUpperCase();
-    db.prepare("INSERT INTO meters (name, type, token) VALUES (?, ?, ?)").run(name, type, token);
-    const meter = db.prepare("SELECT * FROM meters WHERE id = last_insert_rowid()").get();
+    const token =
+      "METER-" + Math.random().toString(36).substring(2, 10).toUpperCase();
+    db.prepare("INSERT INTO meters (name, type, token) VALUES (?, ?, ?)").run(
+      name,
+      type,
+      token
+    );
+    const meter = db
+      .prepare("SELECT * FROM meters WHERE id = last_insert_rowid()")
+      .get();
     res.json({ success: true, meter });
   } catch (e) {
     console.error("ERRO ao criar medidor:", e);
@@ -175,7 +182,7 @@ app.post("/api/meters", authMiddleware, (req, res) => {
 });
 
 // ------------------------------------------------------------
-// ROTAS DE LEITURAS
+// LEITURAS
 // ------------------------------------------------------------
 app.get("/api/readings", (req, res) => {
   try {
@@ -196,27 +203,27 @@ app.get("/api/readings", (req, res) => {
   }
 });
 
-// Leituras por medidor
 app.get("/api/readings/:meterId", (req, res) => {
   try {
     const { meterId } = req.params;
-    const rows = db.prepare(
-      "SELECT * FROM readings WHERE meter_id=? ORDER BY id DESC LIMIT 1000"
-    ).all(meterId);
+    const rows = db
+      .prepare(
+        "SELECT * FROM readings WHERE meter_id=? ORDER BY id DESC LIMIT 1000"
+      )
+      .all(meterId);
     res.json(rows);
   } catch (e) {
-    console.error("ERRO ao buscar leituras por medidor:", e);
-    res.status(500).json({ error: "Erro interno ao buscar leituras por medidor" });
+    console.error("ERRO ao buscar leituras:", e);
+    res.status(500).json({ error: "Erro interno ao buscar leituras" });
   }
 });
 
-// Última leitura por medidor (helper para dashboard)
 app.get("/api/readings/last/:meterId", (req, res) => {
   try {
     const { meterId } = req.params;
-    const row = db.prepare(
-      "SELECT * FROM readings WHERE meter_id=? ORDER BY id DESC LIMIT 1"
-    ).get(meterId);
+    const row = db
+      .prepare("SELECT * FROM readings WHERE meter_id=? ORDER BY id DESC LIMIT 1")
+      .get(meterId);
     res.json(row || null);
   } catch (e) {
     console.error("ERRO ao buscar última leitura:", e);
@@ -224,12 +231,14 @@ app.get("/api/readings/last/:meterId", (req, res) => {
   }
 });
 
-// Inserção manual simples
 app.post("/api/readings", (req, res) => {
   try {
     const { meter_id, type, value } = req.body;
-    if (!meter_id || !type) return res.status(400).json({ error: "meter_id e type são obrigatórios" });
-    const meter = db.prepare("SELECT name, type FROM meters WHERE id=?").get(meter_id);
+    if (!meter_id || !type)
+      return res.status(400).json({ error: "meter_id e type são obrigatórios" });
+    const meter = db
+      .prepare("SELECT name, type FROM meters WHERE id=?")
+      .get(meter_id);
     if (!meter) return res.status(404).json({ error: "Medidor não encontrado" });
 
     db.prepare(
@@ -243,15 +252,23 @@ app.post("/api/readings", (req, res) => {
 });
 
 // ------------------------------------------------------------
-// TARIFAS (histórico)
+// TARIFAS
 // ------------------------------------------------------------
 app.get("/api/tariffs", (req, res) => {
   try {
-    const kwh = db.prepare("SELECT price_per_unit FROM tariffs WHERE type='energia' AND ended_at IS NULL").get();
-    const m3 = db.prepare("SELECT price_per_unit FROM tariffs WHERE type='agua' AND ended_at IS NULL").get();
+    const kwh = db
+      .prepare(
+        "SELECT price_per_unit FROM tariffs WHERE type='energia' AND ended_at IS NULL"
+      )
+      .get();
+    const m3 = db
+      .prepare(
+        "SELECT price_per_unit FROM tariffs WHERE type='agua' AND ended_at IS NULL"
+      )
+      .get();
     res.json({
       kwh_price: kwh ? kwh.price_per_unit : 0,
-      m3_price: m3 ? m3.price_per_unit : 0
+      m3_price: m3 ? m3.price_per_unit : 0,
     });
   } catch (e) {
     console.error("ERRO ao buscar tarifas:", e);
@@ -260,18 +277,25 @@ app.get("/api/tariffs", (req, res) => {
 });
 
 app.post("/api/tariffs", authMiddleware, (req, res) => {
-  if (req.user.role !== "admin") return res.status(403).json({ error: "Acesso negado" });
+  if (req.user.role !== "admin")
+    return res.status(403).json({ error: "Acesso negado" });
   try {
     const { kwh_price, m3_price } = req.body;
     const today = new Date().toISOString().slice(0, 10);
 
-    db.prepare("UPDATE tariffs SET ended_at=? WHERE type='energia' AND ended_at IS NULL").run(today);
-    db.prepare("INSERT INTO tariffs (type, price_per_unit, started_at, ended_at) VALUES ('energia', ?, ?, NULL)")
-      .run(Number(kwh_price), today);
+    db.prepare(
+      "UPDATE tariffs SET ended_at=? WHERE type='energia' AND ended_at IS NULL"
+    ).run(today);
+    db.prepare(
+      "INSERT INTO tariffs (type, price_per_unit, started_at, ended_at) VALUES ('energia', ?, ?, NULL)"
+    ).run(Number(kwh_price), today);
 
-    db.prepare("UPDATE tariffs SET ended_at=? WHERE type='agua' AND ended_at IS NULL").run(today);
-    db.prepare("INSERT INTO tariffs (type, price_per_unit, started_at, ended_at) VALUES ('agua', ?, ?, NULL)")
-      .run(Number(m3_price), today);
+    db.prepare(
+      "UPDATE tariffs SET ended_at=? WHERE type='agua' AND ended_at IS NULL"
+    ).run(today);
+    db.prepare(
+      "INSERT INTO tariffs (type, price_per_unit, started_at, ended_at) VALUES ('agua', ?, ?, NULL)"
+    ).run(Number(m3_price), today);
 
     res.json({ success: true });
   } catch (e) {
@@ -281,27 +305,29 @@ app.post("/api/tariffs", authMiddleware, (req, res) => {
 });
 
 // ------------------------------------------------------------
-// SUMÁRIO DO MÊS (helper para dashboard)
+// SUMÁRIO DO MÊS
 // ------------------------------------------------------------
 app.get("/api/summary/month", (req, res) => {
   try {
     const start = new Date();
     start.setDate(1);
-    start.setHours(0,0,0,0);
+    start.setHours(0, 0, 0, 0);
     const startISO = start.toISOString();
 
-    const rows = db.prepare(
-      "SELECT meter_id, meter_name, type, SUM(value) AS total FROM readings WHERE datetime(created_at) >= datetime(?) GROUP BY meter_id, meter_name, type"
-    ).all(startISO);
+    const rows = db
+      .prepare(
+        "SELECT meter_id, meter_name, type, SUM(value) AS total FROM readings WHERE datetime(created_at) >= datetime(?) GROUP BY meter_id, meter_name, type"
+      )
+      .all(startISO);
 
-    const out = rows.map(r => ({
-      meter_id: r.meter_id,
-      meter_name: r.meter_name,
-      type: r.type,
-      total: Number(r.total || 0)
-    }));
-
-    res.json(out);
+    res.json(
+      rows.map((r) => ({
+        meter_id: r.meter_id,
+        meter_name: r.meter_name,
+        type: r.type,
+        total: Number(r.total || 0),
+      }))
+    );
   } catch (e) {
     console.error("ERRO summary month:", e);
     res.status(500).json({ error: "Erro interno ao gerar resumo" });
@@ -309,8 +335,7 @@ app.get("/api/summary/month", (req, res) => {
 });
 
 // ------------------------------------------------------------
-// ROTA /api/insert.php — Recebe dados POST do medidor IE trifásico
-// Aceita application/json e application/x-www-form-urlencoded
+// ROTA /api/insert.php (IE Tecnologia - trifásico)
 // ------------------------------------------------------------
 app.post("/api/insert.php", (req, res) => {
   try {
@@ -318,38 +343,36 @@ app.post("/api/insert.php", (req, res) => {
     console.log("📥 IE payload:", data);
 
     const token = data.token || data.Token || data.TOKEN;
-    if (!token) return res.status(400).json({ error: "Token ausente na requisição" });
+    if (!token)
+      return res.status(400).json({ error: "Token ausente na requisição" });
 
     const meter = db.prepare("SELECT * FROM meters WHERE token = ?").get(token);
-    if (!meter) return res.status(404).json({ error: "Medidor não encontrado para o token informado" });
+    if (!meter)
+      return res
+        .status(404)
+        .json({ error: "Medidor não encontrado para o token informado" });
 
     if (meter.type === "energia-3f") {
-      // Guarda payload bruto
-      db.prepare("INSERT INTO energy3ph_buffer (meter_parent_id, raw_json) VALUES (?, ?)")
-        .run(meter.id, JSON.stringify(data));
-
-      // Extrai energia ativa acumulada por fase (kWh)
-      const a = parseFloat(data.epa_g ?? data.epa_c ?? 0);
-      const b = parseFloat(data.epb_g ?? data.epb_c ?? 0);
-      const c = parseFloat(data.epc_g ?? data.epc_c ?? 0);
+      db.prepare(
+        "INSERT INTO energy3ph_buffer (meter_parent_id, raw_json) VALUES (?, ?)"
+      ).run(meter.id, JSON.stringify(data));
 
       const fases = [
-        { nome: "Fase A", val: isFinite(a) ? a : 0 },
-        { nome: "Fase B", val: isFinite(b) ? b : 0 },
-        { nome: "Fase C", val: isFinite(c) ? c : 0 },
+        { nome: "Fase A", val: parseFloat(data.epa_g ?? data.epa_c ?? 0) },
+        { nome: "Fase B", val: parseFloat(data.epb_g ?? data.epb_c ?? 0) },
+        { nome: "Fase C", val: parseFloat(data.epc_g ?? data.epc_c ?? 0) },
       ];
 
-      for (const f of fases) {
+      fases.forEach((f) => {
         db.prepare(
           "INSERT INTO readings (meter_id, meter_name, type, value, created_at) VALUES (?, ?, ?, ?, datetime('now'))"
         ).run(meter.id, `${meter.name} - ${f.nome}`, "energia", f.val);
-      }
+      });
 
-      console.log(`✅ IE trifásico salvo: ${meter.name} (A/B/C)`);
+      console.log(`✅ IE trifásico salvo: ${meter.name}`);
       return res.json({ success: true, message: "Leituras trifásicas salvas!" });
     }
 
-    // Medidor simples (agua/energia monofásica)
     const valor = parseFloat(data.value ?? data.consumo ?? 0);
     db.prepare(
       "INSERT INTO readings (meter_id, meter_name, type, value, created_at) VALUES (?, ?, ?, ?, datetime('now'))"
@@ -357,7 +380,6 @@ app.post("/api/insert.php", (req, res) => {
 
     console.log(`✅ IE monofásico salvo: ${meter.name}`);
     return res.json({ success: true, message: "Leitura salva com sucesso!" });
-
   } catch (e) {
     console.error("❌ Erro em /api/insert.php:", e);
     res.status(500).json({ error: "Erro interno ao processar dados" });
